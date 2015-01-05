@@ -1,4 +1,8 @@
-// LICENSE WARNING: IBM was granted a patent on the ARC algorithm.
+// Copyright 2015 Andrew Bursavich. All rights reserved.
+// Use of this source code is governed by The MIT License
+// which can be found in the LICENSE file.
+//
+// WARNING: IBM was granted a patent on the ARC algorithm.
 
 // Package arc implements an adaptive replacement cache.
 //
