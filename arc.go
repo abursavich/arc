@@ -17,10 +17,10 @@ import "container/list"
 // Cache is an adaptive replacement cache.
 // It is not safe for concurrent access.
 type Cache struct {
-	n, p   int                           // max size, pivot
-	rl, rd *list.List                    // MRU live, MRU dead
-	fl, fd *list.List                    // MFU live, MFU dead
-	tbl    map[interface{}]*list.Element // lookup table
+	n, p   int                   // max size, pivot
+	rl, rd *list.List            // MRU live, MRU dead
+	fl, fd *list.List            // MFU live, MFU dead
+	tbl    map[Key]*list.Element // lookup table
 }
 
 // A Key may be any value that is comparable.
@@ -53,7 +53,7 @@ func New(size int) *Cache {
 		n:  size,
 		rl: list.New(), rd: list.New(),
 		fl: list.New(), fd: list.New(),
-		tbl: make(map[interface{}]*list.Element, size<<1),
+		tbl: make(map[Key]*list.Element, size<<1),
 	}
 }
 
