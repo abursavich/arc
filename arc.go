@@ -61,7 +61,8 @@ func (c *Cache[K, V]) Get(key K) (value V, ok bool) {
 
 // Set writes a key's value to the cache.
 func (c *Cache[K, V]) Set(key K, value V) {
-	if e, ok := c.get(key); !ok {
+	switch e, ok := c.get(key); {
+	case !ok:
 		// miss
 		if l1 := c.rl.Len() + c.rd.Len(); l1 == c.n {
 			if c.rl.Len() < c.n {
@@ -77,10 +78,7 @@ func (c *Cache[K, V]) Set(key K, value V) {
 			c.evict(false)
 		}
 		c.tbl[key] = c.rl.PushFront(item[K, V]{key, value, live})
-	} else if e.Value.has(live) {
-		// live
-		e.Value.val = value
-	} else {
+	case !e.Value.has(live):
 		// dead
 		e.Value.val = value
 		if e.Value.has(hot) { // fd
@@ -95,6 +93,9 @@ func (c *Cache[K, V]) Set(key K, value V) {
 		}
 		e.Value.set(live)
 		c.tbl[key] = c.fl.PushFront(e.Value)
+	default:
+		// live
+		e.Value.val = value
 	}
 }
 
