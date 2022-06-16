@@ -222,12 +222,12 @@ func TestTable(t *testing.T) {
 		a := make([]int, l.Len())
 		el := l.Front()
 		for i := range a {
-			a[i] = el.Value.(*item).key.(int)
+			a[i] = el.Value.(*item[int, int]).key
 			el = el.Next()
 		}
 		return a
 	}
-	c := New(10)
+	c := New[int, int](10)
 	for i, want := range table {
 		k := want.k
 		if _, ok := c.Get(k); !ok {
@@ -239,7 +239,7 @@ func TestTable(t *testing.T) {
 			if i > 0 {
 				prev = table[i-1]
 			}
-			t.Errorf("unexpected state: step %d\nprev %+v\ngot  %+v\nwant %+v", i, prev, got, want)
+			t.Fatalf("unexpected state: step %d\nprev %+v\ngot  %+v\nwant %+v", i, prev, got, want)
 		}
 	}
 }

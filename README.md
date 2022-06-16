@@ -1,6 +1,6 @@
 
 # arc
-    import "github.com/abursavich/arc"
+    import "bursavich.dev/arc"
 
 Package arc implements an adaptive replacement cache.
 
