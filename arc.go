@@ -132,9 +132,11 @@ func (c *Cache[K, V]) evict(mfu bool) {
 	} else {
 		src, dst = c.fl, c.fd
 	}
+	var zero V
 	e := src.Back()
 	src.Remove(e)
 	e.Value.unset(live)
+	e.Value.val = zero
 	c.tbl[e.Value.key] = dst.PushFront(e.Value)
 }
 
