@@ -221,10 +221,10 @@ func TestTable(t *testing.T) {
 	}
 	ints := func(l *list.List[item[int, int]]) []int {
 		a := make([]int, l.Len())
-		el := l.Front()
+		e := l.Front()
 		for i := range a {
-			a[i] = el.Value.key
-			el = el.Next()
+			a[i] = e.Value.key
+			e = e.Next()
 		}
 		return a
 	}

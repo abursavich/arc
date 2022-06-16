@@ -53,15 +53,15 @@ func New[K comparable, V any](size int) *Cache[K, V] {
 
 // Get reads a key's value from the cache.
 func (c *Cache[K, V]) Get(key K) (value V, ok bool) {
-	if el, ok := c.get(key); ok && el.Value.has(live) {
-		return el.Value.val, true
+	if e, ok := c.get(key); ok && e.Value.has(live) {
+		return e.Value.val, true
 	}
 	return
 }
 
 // Set writes a key's value to the cache.
 func (c *Cache[K, V]) Set(key K, value V) {
-	if el, ok := c.get(key); !ok {
+	if e, ok := c.get(key); !ok {
 		// miss
 		if l1 := c.rl.Len() + c.rd.Len(); l1 == c.n {
 			if c.rl.Len() < c.n {
@@ -77,24 +77,24 @@ func (c *Cache[K, V]) Set(key K, value V) {
 			c.evict(false)
 		}
 		c.tbl[key] = c.rl.PushFront(item[K, V]{key, value, live})
-	} else if el.Value.has(live) {
+	} else if e.Value.has(live) {
 		// live
-		el.Value.val = value
+		e.Value.val = value
 	} else {
 		// dead
-		el.Value.val = value
-		if el.Value.has(hot) { // fd
+		e.Value.val = value
+		if e.Value.has(hot) { // fd
 			c.p = max(0, c.p-max(c.rd.Len()/c.fd.Len(), 1))
 			c.evict(true)
-			c.fd.Remove(el)
+			c.fd.Remove(e)
 		} else { // rd
-			el.Value.set(hot)
+			e.Value.set(hot)
 			c.p = min(c.n, c.p+max(c.fd.Len()/c.rd.Len(), 1))
 			c.evict(false)
-			c.rd.Remove(el)
+			c.rd.Remove(e)
 		}
-		el.Value.set(live)
-		c.tbl[key] = c.fl.PushFront(el.Value)
+		e.Value.set(live)
+		c.tbl[key] = c.fl.PushFront(e.Value)
 	}
 }
 
@@ -103,23 +103,23 @@ func (c *Cache[K, V]) Len() int {
 	return c.rl.Len() + c.fl.Len()
 }
 
-func (c *Cache[K, V]) get(key K) (el *list.Element[item[K, V]], ok bool) {
-	el = c.tbl[key]
-	if el == nil {
+func (c *Cache[K, V]) get(key K) (e *list.Element[item[K, V]], ok bool) {
+	e = c.tbl[key]
+	if e == nil {
 		return nil, false
 	}
-	if !el.Value.has(live) { // dead
-		return el, true
+	if !e.Value.has(live) { // dead
+		return e, true
 	}
-	if el.Value.has(hot) { // hot
-		c.fl.MoveToFront(el)
-		return el, true
+	if e.Value.has(hot) { // hot
+		c.fl.MoveToFront(e)
+		return e, true
 	}
 	// live
-	el.Value.set(hot)
-	c.rl.Remove(el)
-	c.tbl[key] = c.fl.PushFront(el.Value)
-	return el, true
+	e.Value.set(hot)
+	c.rl.Remove(e)
+	c.tbl[key] = c.fl.PushFront(e.Value)
+	return e, true
 }
 
 // evict clears space by moving an item from the live cache to the dead cache.
@@ -131,10 +131,10 @@ func (c *Cache[K, V]) evict(mfu bool) {
 	} else {
 		src, dst = c.fl, c.fd
 	}
-	el := src.Back()
-	src.Remove(el)
-	el.Value.unset(live)
-	c.tbl[el.Value.key] = dst.PushFront(el.Value)
+	e := src.Back()
+	src.Remove(e)
+	e.Value.unset(live)
+	c.tbl[e.Value.key] = dst.PushFront(e.Value)
 }
 
 // deleteLRU removes the LRU from the list and deletes it from the table.
