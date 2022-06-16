@@ -5,9 +5,10 @@
 package arc
 
 import (
-	"container/list"
 	"reflect"
 	"testing"
+
+	"bursavich.dev/arc/internal/list"
 )
 
 func TestTable(t *testing.T) {
@@ -218,11 +219,11 @@ func TestTable(t *testing.T) {
 		{k: 26, rl: []int{1, 2, 22}, rd: []int{17, 28, 29, 21, 16, 27}, fl: []int{26, 15, 7, 10, 20, 3, 9}, fd: []int{6, 8, 23, 19}},
 		{k: 21, rl: []int{1, 2, 22}, rd: []int{17, 28, 29, 16, 27}, fl: []int{21, 26, 15, 7, 10, 20, 3}, fd: []int{9, 6, 8, 23, 19}},
 	}
-	ints := func(l *list.List) []int {
+	ints := func(l *list.List[item[int, int]]) []int {
 		a := make([]int, l.Len())
 		el := l.Front()
 		for i := range a {
-			a[i] = el.Value.(*item[int, int]).key
+			a[i] = el.Value.key
 			el = el.Next()
 		}
 		return a

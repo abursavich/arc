@@ -12,21 +12,12 @@
 // 	https://www.google.com/patents/US6996676
 package arc
 
-import "container/list"
+import "bursavich.dev/arc/internal/list"
 
 const (
 	live = 1 << iota
 	hot
 )
-
-// Cache is an adaptive replacement cache.
-// It is not safe for concurrent access.
-type Cache[K comparable, V any] struct {
-	n, p   int                 // max size, pivot
-	rl, rd *list.List          // MRU live, MRU dead
-	fl, fd *list.List          // MFU live, MFU dead
-	tbl    map[K]*list.Element // lookup table
-}
 
 type item[K comparable, V any] struct {
 	key  K
@@ -38,6 +29,15 @@ func (i *item[K, V]) has(v int) bool { return i.mask&v == v }
 func (i *item[K, V]) set(v int)      { i.mask |= v }
 func (i *item[K, V]) unset(v int)    { i.mask &= ^v }
 
+// Cache is an adaptive replacement cache.
+// It is not safe for concurrent access.
+type Cache[K comparable, V any] struct {
+	n, p   int                             // max size, pivot
+	rl, rd *list.List[item[K, V]]          // MRU live, MRU dead
+	fl, fd *list.List[item[K, V]]          // MFU live, MFU dead
+	tbl    map[K]*list.Element[item[K, V]] // lookup table
+}
+
 // New creates a new Cache.
 func New[K comparable, V any](size int) *Cache[K, V] {
 	if size <= 0 {
@@ -45,23 +45,23 @@ func New[K comparable, V any](size int) *Cache[K, V] {
 	}
 	return &Cache[K, V]{
 		n:  size,
-		rl: list.New(), rd: list.New(),
-		fl: list.New(), fd: list.New(),
-		tbl: make(map[K]*list.Element, size<<1),
+		rl: list.New[item[K, V]](), rd: list.New[item[K, V]](),
+		fl: list.New[item[K, V]](), fd: list.New[item[K, V]](),
+		tbl: make(map[K]*list.Element[item[K, V]], size<<1),
 	}
 }
 
 // Get reads a key's value from the cache.
 func (c *Cache[K, V]) Get(key K) (value V, ok bool) {
-	if _, it, ok := c.get(key); ok && it.has(live) {
-		return it.val, true
+	if el, ok := c.get(key); ok && el.Value.has(live) {
+		return el.Value.val, true
 	}
 	return
 }
 
 // Set writes a key's value to the cache.
 func (c *Cache[K, V]) Set(key K, value V) {
-	if el, it, ok := c.get(key); !ok {
+	if el, ok := c.get(key); !ok {
 		// miss
 		if l1 := c.rl.Len() + c.rd.Len(); l1 == c.n {
 			if c.rl.Len() < c.n {
@@ -76,25 +76,25 @@ func (c *Cache[K, V]) Set(key K, value V) {
 			}
 			c.evict(false)
 		}
-		c.tbl[key] = c.rl.PushFront(&item[K, V]{key, value, live})
-	} else if it.has(live) {
+		c.tbl[key] = c.rl.PushFront(item[K, V]{key, value, live})
+	} else if el.Value.has(live) {
 		// live
-		it.val = value
+		el.Value.val = value
 	} else {
 		// dead
-		it.val = value
-		if it.has(hot) { // fd
+		el.Value.val = value
+		if el.Value.has(hot) { // fd
 			c.p = max(0, c.p-max(c.rd.Len()/c.fd.Len(), 1))
 			c.evict(true)
 			c.fd.Remove(el)
 		} else { // rd
-			it.set(hot)
+			el.Value.set(hot)
 			c.p = min(c.n, c.p+max(c.fd.Len()/c.rd.Len(), 1))
 			c.evict(false)
 			c.rd.Remove(el)
 		}
-		it.set(live)
-		c.tbl[key] = c.fl.PushFront(it)
+		el.Value.set(live)
+		c.tbl[key] = c.fl.PushFront(el.Value)
 	}
 }
 
@@ -103,47 +103,45 @@ func (c *Cache[K, V]) Len() int {
 	return c.rl.Len() + c.fl.Len()
 }
 
-func (c *Cache[K, V]) get(key K) (el *list.Element, it *item[K, V], ok bool) {
+func (c *Cache[K, V]) get(key K) (el *list.Element[item[K, V]], ok bool) {
 	el = c.tbl[key]
 	if el == nil {
-		return nil, nil, false
+		return nil, false
 	}
-	it = el.Value.(*item[K, V])
-	if !it.has(live) { // dead
-		return el, it, true
+	if !el.Value.has(live) { // dead
+		return el, true
 	}
-	if it.has(hot) { // hot
+	if el.Value.has(hot) { // hot
 		c.fl.MoveToFront(el)
-		return el, it, true
+		return el, true
 	}
 	// live
-	it.set(hot)
+	el.Value.set(hot)
 	c.rl.Remove(el)
-	c.tbl[key] = c.fl.PushFront(it)
-	return el, it, true
+	c.tbl[key] = c.fl.PushFront(el.Value)
+	return el, true
 }
 
 // evict clears space by moving an item from the live cache to the dead cache.
 // mfu gives preferential treatment to the MFU cache when all else is equal.
 func (c *Cache[K, V]) evict(mfu bool) {
-	var src, dst *list.List
+	var src, dst *list.List[item[K, V]]
 	if rl := c.rl.Len(); rl > 0 && (rl > c.p || (mfu && rl == c.p)) {
 		src, dst = c.rl, c.rd
 	} else {
 		src, dst = c.fl, c.fd
 	}
-	e := src.Back()
-	src.Remove(e)
-	it := e.Value.(*item[K, V])
-	it.unset(live)
-	c.tbl[it.key] = dst.PushFront(it)
+	el := src.Back()
+	src.Remove(el)
+	el.Value.unset(live)
+	c.tbl[el.Value.key] = dst.PushFront(el.Value)
 }
 
 // deleteLRU removes the LRU from the list and deletes it from the table.
-func (c *Cache[K, V]) deleteLRU(l *list.List) {
+func (c *Cache[K, V]) deleteLRU(l *list.List[item[K, V]]) {
 	e := l.Back()
 	l.Remove(e)
-	delete(c.tbl, e.Value.(*item[K, V]).key)
+	delete(c.tbl, e.Value.key)
 }
 
 func min(a, b int) int {
