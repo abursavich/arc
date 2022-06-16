@@ -4,9 +4,9 @@
 //
 // WARNING: IBM was granted a patent on the ARC algorithm.
 
-// Package arc implements an adaptive replacement cache.
+// Package arc implements a generic adaptive replacement cache.
 //
-// See
+// See:
 // 	https://en.wikipedia.org/wiki/Adaptive_replacement_cache
 // 	https://www.usenix.org/legacy/events/fast03/tech/full_papers/megiddo/megiddo.pdf
 // 	https://www.google.com/patents/US6996676
