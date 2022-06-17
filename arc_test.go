@@ -224,15 +224,6 @@ func TestTable(t *testing.T) {
 		{cmd: "get", key: 26, val: "twenty-six", state: state{rl: []int{1, 2, 22}, rd: []int{17, 28, 29, 21, 16, 27}, fl: []int{26, 15, 7, 10, 20, 3, 9}, fd: []int{6, 8, 23, 19}}},
 		{cmd: "set", key: 21, val: "twenty-one", state: state{rl: []int{1, 2, 22}, rd: []int{17, 28, 29, 16, 27}, fl: []int{21, 26, 15, 7, 10, 20, 3}, fd: []int{9, 6, 8, 23, 19}}},
 	}
-	ints := func(l *list.List[item[int, string]]) []int {
-		a := make([]int, l.Len())
-		e := l.Front()
-		for i := range a {
-			a[i] = e.Value.key
-			e = e.Next()
-		}
-		return a
-	}
 	c := New[int, string](10)
 	for i, tt := range tests {
 		var cmd string
@@ -248,7 +239,7 @@ func TestTable(t *testing.T) {
 		default:
 			t.Fatalf("step %d: unexpected command: %q", i, tt.cmd)
 		}
-		got := state{rl: ints(c.rl), rd: ints(c.rd), fl: ints(c.fl), fd: ints(c.fd)}
+		got := state{rl: ints(&c.live.mru), rd: ints(&c.dead.mru), fl: ints(&c.live.mfu), fd: ints(&c.dead.mfu)}
 		if !reflect.DeepEqual(got, tt.state) {
 			var prev state
 			if i > 0 {
@@ -257,4 +248,14 @@ func TestTable(t *testing.T) {
 			t.Fatalf("step %d: %s: unexpected state:\nprev %+v\ngot  %+v\nwant %+v", i, cmd, prev, got, tt.state)
 		}
 	}
+}
+
+func ints[T any](l *list.List[item[int, T]]) []int {
+	a := make([]int, l.Len())
+	e := l.Front()
+	for i := range a {
+		a[i] = e.Value.key
+		e = e.Next()
+	}
+	return a
 }

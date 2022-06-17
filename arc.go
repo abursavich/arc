@@ -14,28 +14,43 @@ package arc
 
 import "bursavich.dev/arc/internal/list"
 
-const (
-	live = 1 << iota
-	hot
-)
+type empty struct{}
 
 type item[K comparable, V any] struct {
-	key  K
-	val  V
-	mask int
+	key K
+	val V
+	hot bool
 }
 
-func (i *item[K, V]) has(v int) bool { return i.mask&v == v }
-func (i *item[K, V]) set(v int)      { i.mask |= v }
-func (i *item[K, V]) unset(v int)    { i.mask &= ^v }
+type subCache[K comparable, V any] struct {
+	tbl map[K]*list.Element[item[K, V]]
+	mru list.List[item[K, V]]
+	mfu list.List[item[K, V]]
+}
+
+func (c *subCache[K, V]) init(size int) {
+	c.tbl = make(map[K]*list.Element[item[K, V]], size)
+	c.mru.Init()
+	c.mfu.Init()
+}
+
+func (c *subCache[K, V]) removeBack(l *list.List[item[K, V]]) item[K, V] {
+	return c.remove(l, l.Back())
+}
+
+func (c *subCache[K, V]) remove(l *list.List[item[K, V]], e *list.Element[item[K, V]]) item[K, V] {
+	l.Remove(e)
+	delete(c.tbl, e.Value.key)
+	return e.Value
+}
 
 // Cache is an adaptive replacement cache.
 // It is not safe for concurrent access.
 type Cache[K comparable, V any] struct {
-	n, p   int                             // max size, pivot
-	rl, rd *list.List[item[K, V]]          // MRU live, MRU dead
-	fl, fd *list.List[item[K, V]]          // MFU live, MFU dead
-	tbl    map[K]*list.Element[item[K, V]] // lookup table
+	max   int // max live size
+	pivot int // pivot
+	live  subCache[K, V]
+	dead  subCache[K, empty]
 }
 
 // New creates a new Cache.
@@ -43,17 +58,20 @@ func New[K comparable, V any](size int) *Cache[K, V] {
 	if size <= 0 {
 		panic("arc: size must be greater than 0")
 	}
-	return &Cache[K, V]{
-		n:  size,
-		rl: list.New[item[K, V]](), rd: list.New[item[K, V]](),
-		fl: list.New[item[K, V]](), fd: list.New[item[K, V]](),
-		tbl: make(map[K]*list.Element[item[K, V]], size<<1),
-	}
+	c := &Cache[K, V]{max: size}
+	c.live.init(size)
+	c.dead.init(size)
+	return c
+}
+
+// Len returns the number of live items in the cache.
+func (c *Cache[K, V]) Len() int {
+	return len(c.live.tbl)
 }
 
 // Get reads a key's value from the cache.
 func (c *Cache[K, V]) Get(key K) (value V, ok bool) {
-	if e, ok := c.get(key); ok && e.Value.has(live) {
+	if e, ok := c.getLive(key); ok {
 		return e.Value.val, true
 	}
 	return
@@ -61,90 +79,81 @@ func (c *Cache[K, V]) Get(key K) (value V, ok bool) {
 
 // Set writes a key's value to the cache.
 func (c *Cache[K, V]) Set(key K, value V) {
-	switch e, ok := c.get(key); {
-	case !ok:
-		// miss
-		if l1 := c.rl.Len() + c.rd.Len(); l1 == c.n {
-			if c.rl.Len() < c.n {
-				c.deleteLRU(c.rd)
-				c.evict(false)
-			} else {
-				c.deleteLRU(c.rl)
-			}
-		} else if l1 < c.n && len(c.tbl) >= c.n {
-			if len(c.tbl) == c.n<<1 {
-				c.deleteLRU(c.fd)
-			}
-			c.evict(false)
-		}
-		c.tbl[key] = c.rl.PushFront(item[K, V]{key, value, live})
-	case !e.Value.has(live):
-		// dead
+	if e, ok := c.getLive(key); ok {
+		// Live cache hit.
 		e.Value.val = value
-		if e.Value.has(hot) { // fd
-			c.p = max(0, c.p-max(c.rd.Len()/c.fd.Len(), 1))
-			c.evict(true)
-			c.fd.Remove(e)
-		} else { // rd
-			e.Value.set(hot)
-			c.p = min(c.n, c.p+max(c.fd.Len()/c.rd.Len(), 1))
-			c.evict(false)
-			c.rd.Remove(e)
-		}
-		e.Value.set(live)
-		c.tbl[key] = c.fl.PushFront(e.Value)
-	default:
-		// live
-		e.Value.val = value
+		return
 	}
+	if e, ok := c.dead.tbl[key]; ok {
+		// Dead cache hit.
+		if e.Value.hot {
+			// MFU
+			c.pivot = max(0, c.pivot-max(c.dead.mru.Len()/c.dead.mfu.Len(), 1))
+			c.evict(true)
+			c.dead.remove(&c.dead.mfu, e)
+		} else {
+			// MRU
+			c.pivot = min(c.max, c.pivot+max(c.dead.mfu.Len()/c.dead.mru.Len(), 1))
+			c.evict(false)
+			c.dead.remove(&c.dead.mru, e)
+		}
+		c.live.tbl[key] = c.live.mfu.PushFront(item[K, V]{
+			key: key,
+			val: value,
+			hot: true,
+		})
+		return
+	}
+	// Cache miss.
+	if mruLen := c.live.mru.Len() + c.dead.mru.Len(); mruLen == c.max {
+		if c.live.mru.Len() < c.max {
+			c.dead.removeBack(&c.dead.mru)
+			c.evict(false)
+		} else {
+			c.live.removeBack(&c.live.mru)
+		}
+	} else if totalSize := len(c.live.tbl) + len(c.dead.tbl); mruLen < c.max && totalSize >= c.max {
+		if totalSize == c.max<<1 {
+			c.dead.removeBack(&c.dead.mfu)
+		}
+		c.evict(false)
+	}
+	c.live.tbl[key] = c.live.mru.PushFront(item[K, V]{
+		key: key,
+		val: value,
+		hot: false,
+	})
 }
 
-// Len returns the number of items in the cache.
-func (c *Cache[K, V]) Len() int {
-	return c.rl.Len() + c.fl.Len()
-}
-
-func (c *Cache[K, V]) get(key K) (e *list.Element[item[K, V]], ok bool) {
-	e = c.tbl[key]
-	if e == nil {
+func (c *Cache[K, V]) getLive(key K) (e *list.Element[item[K, V]], ok bool) {
+	e, ok = c.live.tbl[key]
+	if !ok {
 		return nil, false
 	}
-	if !e.Value.has(live) { // dead
+	if e.Value.hot {
+		// already hot
+		c.live.mfu.MoveToFront(e)
 		return e, true
 	}
-	if e.Value.has(hot) { // hot
-		c.fl.MoveToFront(e)
-		return e, true
-	}
-	// live
-	e.Value.set(hot)
-	c.rl.Remove(e)
-	c.tbl[key] = c.fl.PushFront(e.Value)
+	// newly hot
+	e.Value.hot = true
+	c.live.mru.Remove(e)
+	c.live.tbl[key] = c.live.mfu.PushFront(e.Value)
 	return e, true
 }
 
 // evict clears space by moving an item from the live cache to the dead cache.
 // mfu gives preferential treatment to the MFU cache when all else is equal.
 func (c *Cache[K, V]) evict(mfu bool) {
-	var src, dst *list.List[item[K, V]]
-	if rl := c.rl.Len(); rl > 0 && (rl > c.p || (mfu && rl == c.p)) {
-		src, dst = c.rl, c.rd
-	} else {
-		src, dst = c.fl, c.fd
+	live, dead := &c.live.mfu, &c.dead.mfu
+	if n := c.live.mru.Len(); n > 0 && (n > c.pivot || (mfu && n == c.pivot)) {
+		live, dead = &c.live.mru, &c.dead.mru
 	}
-	var zero V
-	e := src.Back()
-	src.Remove(e)
-	e.Value.unset(live)
-	e.Value.val = zero
-	c.tbl[e.Value.key] = dst.PushFront(e.Value)
-}
-
-// deleteLRU removes the LRU from the list and deletes it from the table.
-func (c *Cache[K, V]) deleteLRU(l *list.List[item[K, V]]) {
-	e := l.Back()
-	l.Remove(e)
-	delete(c.tbl, e.Value.key)
+	it := c.live.removeBack(live)
+	c.dead.tbl[it.key] = dead.PushFront(item[K, empty]{
+		key: it.key,
+		hot: it.hot,
+	})
 }
 
 func min(a, b int) int {

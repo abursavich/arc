@@ -40,7 +40,7 @@ Get reads a key's value from the cache.
 ```go
 func (c *Cache[K, V]) Len() int
 ```
-Len returns the number of items in the cache.
+Len returns the number of live items in the cache.
 
 
 ### func (\*Cache[K, V]) Set
