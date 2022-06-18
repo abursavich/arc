@@ -34,12 +34,8 @@ func (c *subCache[K, V]) init(size int) {
 	c.mfu.Init()
 }
 
-func (c *subCache[K, V]) removeBack(l *list.List[item[K, V]]) item[K, V] {
-	return c.remove(l, l.Back())
-}
-
-func (c *subCache[K, V]) remove(l *list.List[item[K, V]], e *list.Element[item[K, V]]) item[K, V] {
-	l.Remove(e)
+func (c *subCache[K, V]) remove(e *list.Element[item[K, V]]) item[K, V] {
+	e.List().Remove(e)
 	delete(c.tbl, e.Value.key)
 	return e.Value
 }
@@ -69,15 +65,15 @@ func (c *Cache[K, V]) Len() int {
 	return len(c.live.tbl)
 }
 
-// Get reads a key's value from the cache.
-func (c *Cache[K, V]) Get(key K) (value V, ok bool) {
+// Get reads the key's value from the cache.
+func (c *Cache[K, V]) Get(key K) (value V, found bool) {
 	if e, ok := c.getLive(key); ok {
 		return e.Value.val, true
 	}
 	return
 }
 
-// Set writes a key's value to the cache.
+// Set writes the key's value to the cache.
 func (c *Cache[K, V]) Set(key K, value V) {
 	if e, ok := c.getLive(key); ok {
 		// Live cache hit.
@@ -90,12 +86,12 @@ func (c *Cache[K, V]) Set(key K, value V) {
 			// MFU
 			c.pivot = max(0, c.pivot-max(c.dead.mru.Len()/c.dead.mfu.Len(), 1))
 			c.evict(true)
-			c.dead.remove(&c.dead.mfu, e)
+			c.dead.remove(e)
 		} else {
 			// MRU
 			c.pivot = min(c.max, c.pivot+max(c.dead.mfu.Len()/c.dead.mru.Len(), 1))
 			c.evict(false)
-			c.dead.remove(&c.dead.mru, e)
+			c.dead.remove(e)
 		}
 		c.live.tbl[key] = c.live.mfu.PushFront(item[K, V]{
 			key: key,
@@ -107,14 +103,14 @@ func (c *Cache[K, V]) Set(key K, value V) {
 	// Cache miss.
 	if mruLen := c.live.mru.Len() + c.dead.mru.Len(); mruLen == c.max {
 		if c.live.mru.Len() < c.max {
-			c.dead.removeBack(&c.dead.mru)
+			c.dead.remove(c.dead.mru.Back())
 			c.evict(false)
 		} else {
-			c.live.removeBack(&c.live.mru)
+			c.live.remove(c.live.mru.Back())
 		}
 	} else if totalSize := len(c.live.tbl) + len(c.dead.tbl); mruLen < c.max && totalSize >= c.max {
 		if totalSize == c.max<<1 {
-			c.dead.removeBack(&c.dead.mfu)
+			c.dead.remove(c.dead.mfu.Back())
 		}
 		c.evict(false)
 	}
@@ -128,14 +124,16 @@ func (c *Cache[K, V]) Set(key K, value V) {
 func (c *Cache[K, V]) getLive(key K) (e *list.Element[item[K, V]], ok bool) {
 	e, ok = c.live.tbl[key]
 	if !ok {
+		// Live cache miss.
 		return nil, false
 	}
+	// Live cache hit.
 	if e.Value.hot {
-		// already hot
+		// Key is already hot.
 		c.live.mfu.MoveToFront(e)
 		return e, true
 	}
-	// newly hot
+	// Key is newly hot.
 	e.Value.hot = true
 	c.live.mru.Remove(e)
 	c.live.tbl[key] = c.live.mfu.PushFront(e.Value)
@@ -149,7 +147,7 @@ func (c *Cache[K, V]) evict(mfu bool) {
 	if n := c.live.mru.Len(); n > 0 && (n > c.pivot || (mfu && n == c.pivot)) {
 		live, dead = &c.live.mru, &c.dead.mru
 	}
-	it := c.live.removeBack(live)
+	it := c.live.remove(live.Back())
 	c.dead.tbl[it.key] = dead.PushFront(item[K, empty]{
 		key: it.key,
 		hot: it.hot,

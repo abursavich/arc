@@ -27,6 +27,11 @@ type Element[T any] struct {
 	Value T
 }
 
+// List returns the element's list or nil.
+func (e *Element[T]) List() *List[T] {
+	return e.list
+}
+
 // Next returns the next list element or nil.
 func (e *Element[T]) Next() *Element[T] {
 	if p := e.next; e.list != nil && p != &e.list.root {
