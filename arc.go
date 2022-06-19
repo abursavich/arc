@@ -75,15 +75,16 @@ func (c *Cache[K, V]) Len() int {
 
 // Get reads the key's value from the cache.
 func (c *Cache[K, V]) Get(key K) (value V, found bool) {
-	if e, ok := c.getLive(key); ok {
+	if e, ok := c.get(key); ok {
 		return e.Value.val, true
 	}
-	return
+	var zero V
+	return zero, false
 }
 
 // Set writes the key's value to the cache.
 func (c *Cache[K, V]) Set(key K, value V) {
-	if e, ok := c.getLive(key); ok {
+	if e, ok := c.get(key); ok {
 		// Live cache hit.
 		e.Value.val = value
 		return
@@ -124,7 +125,7 @@ func (c *Cache[K, V]) Delete(key K) {
 	}
 }
 
-func (c *Cache[K, V]) getLive(key K) (e *list.Element[item[K, V]], ok bool) {
+func (c *Cache[K, V]) get(key K) (e *list.Element[item[K, V]], ok bool) {
 	e, ok = c.live.tbl[key]
 	if !ok {
 		// Live cache miss.
@@ -137,9 +138,13 @@ func (c *Cache[K, V]) getLive(key K) (e *list.Element[item[K, V]], ok bool) {
 		return e, true
 	}
 	// Key is newly hot.
-	e.Value.hot = true
 	c.live.mru.Remove(e)
-	c.live.tbl[key] = c.live.mfu.PushFront(e.Value)
+	e = c.live.mfu.PushFront(item[K, V]{
+		key: key,
+		val: e.Value.val,
+		hot: true,
+	})
+	c.live.tbl[key] = e
 	return e, true
 }
 
