@@ -1,10 +1,15 @@
 // Copyright 2015 Andrew Bursavich. All rights reserved.
 // Use of this source code is governed by The MIT License
 // which can be found in the LICENSE file.
-//
-// WARNING: IBM was granted a patent on the ARC algorithm.
 
 // Package arc implements a generic adaptive replacement cache.
+//
+// It's similar to IBM's patented version in the sense that it pivots (or adapts) between a most-recently-used
+// and frequently-used cache when misses hit a ghost cache of recently evicted entries. However, this version
+// permits the deletion of entries and the precise details of pivoting rate and ghost cache eviction are different.
+// Given the same sequence of mutually-supported operations, the contents of the two implementations may diverge.
+//
+// I am not a lawyer. This is not legal advice.
 //
 // See:
 // 	https://en.wikipedia.org/wiki/Adaptive_replacement_cache
@@ -54,7 +59,10 @@ func New[K comparable, V any](size int) *Cache[K, V] {
 	if size <= 0 {
 		panic("arc: size must be greater than 0")
 	}
-	c := &Cache[K, V]{max: size}
+	c := &Cache[K, V]{
+		max:   size,
+		pivot: size / 2,
+	}
 	c.live.init(size)
 	c.dead.init(size)
 	return c
@@ -83,16 +91,12 @@ func (c *Cache[K, V]) Set(key K, value V) {
 	if e, ok := c.dead.tbl[key]; ok {
 		// Dead cache hit.
 		if e.Value.hot {
-			// MFU
-			c.pivot = max(0, c.pivot-max(c.dead.mru.Len()/c.dead.mfu.Len(), 1))
-			c.evict(true)
-			c.dead.remove(e)
+			c.pivot = max(0, c.pivot-1)
 		} else {
-			// MRU
-			c.pivot = min(c.max, c.pivot+max(c.dead.mfu.Len()/c.dead.mru.Len(), 1))
-			c.evict(false)
-			c.dead.remove(e)
+			c.pivot = min(c.max, c.pivot+1)
 		}
+		c.dead.remove(e)
+		c.evict(e.Value.hot)
 		c.live.tbl[key] = c.live.mfu.PushFront(item[K, V]{
 			key: key,
 			val: value,
@@ -101,24 +105,23 @@ func (c *Cache[K, V]) Set(key K, value V) {
 		return
 	}
 	// Cache miss.
-	if mruLen := c.live.mru.Len() + c.dead.mru.Len(); mruLen == c.max {
-		if c.live.mru.Len() < c.max {
-			c.dead.remove(c.dead.mru.Back())
-			c.evict(false)
-		} else {
-			c.live.remove(c.live.mru.Back())
-		}
-	} else if totalSize := len(c.live.tbl) + len(c.dead.tbl); mruLen < c.max && totalSize >= c.max {
-		if totalSize == c.max<<1 {
-			c.dead.remove(c.dead.mfu.Back())
-		}
-		c.evict(false)
-	}
+	c.evict(false)
 	c.live.tbl[key] = c.live.mru.PushFront(item[K, V]{
 		key: key,
 		val: value,
 		hot: false,
 	})
+}
+
+// Delete deletes the key's value from the cache.
+func (c *Cache[K, V]) Delete(key K) {
+	if e, ok := c.live.tbl[key]; ok {
+		// Live cache hit.
+		c.live.remove(e)
+	} else if e, ok := c.dead.tbl[key]; ok {
+		// Dead cache hit.
+		c.dead.remove(e)
+	}
 }
 
 func (c *Cache[K, V]) getLive(key K) (e *list.Element[item[K, V]], ok bool) {
@@ -140,18 +143,30 @@ func (c *Cache[K, V]) getLive(key K) (e *list.Element[item[K, V]], ok bool) {
 	return e, true
 }
 
-// evict clears space by moving an item from the live cache to the dead cache.
-// mfu gives preferential treatment to the MFU cache when all else is equal.
-func (c *Cache[K, V]) evict(mfu bool) {
-	live, dead := &c.live.mfu, &c.dead.mfu
-	if n := c.live.mru.Len(); n > 0 && (n > c.pivot || (mfu && n == c.pivot)) {
-		live, dead = &c.live.mru, &c.dead.mru
+// evict clears space, if necessary, by moving an item from the live cache to the dead cache
+// and/or dropping items from the dead cache. hot gives preferential treatment to the MFU cache
+// when all else is equal.
+func (c *Cache[K, V]) evict(hot bool) {
+	if len(c.live.tbl) >= c.max {
+		mruLen := c.live.mru.Len()
+		mfuLen := c.live.mfu.Len()
+		live, dead := &c.live.mfu, &c.dead.mfu
+		if mruLen > 0 && (mruLen > c.pivot || (hot && mruLen == c.pivot) || mfuLen == 0) {
+			live, dead = &c.live.mru, &c.dead.mru
+		}
+		it := c.live.remove(live.Back())
+		c.dead.tbl[it.key] = dead.PushFront(item[K, empty]{
+			key: it.key,
+			hot: it.hot,
+		})
 	}
-	it := c.live.remove(live.Back())
-	c.dead.tbl[it.key] = dead.PushFront(item[K, empty]{
-		key: it.key,
-		hot: it.hot,
-	})
+	if len(c.dead.tbl) > c.max {
+		dead := &c.dead.mfu
+		if c.live.mru.Len()+c.dead.mru.Len() >= c.max {
+			dead = &c.dead.mru
+		}
+		c.dead.remove(dead.Back())
+	}
 }
 
 func min(a, b int) int {
