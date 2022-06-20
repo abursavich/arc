@@ -6,9 +6,11 @@ package arc
 
 import (
 	"fmt"
+	"math/rand"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"bursavich.dev/arc/internal/list"
 )
@@ -1128,6 +1130,49 @@ func TestTable(t *testing.T) {
 				prev = tests[i-1].state
 			}
 			t.Fatalf("step %d: %s: unexpected state:\nprev %s\ngot  %s\nwant %s", i, cmd, prev, got, tt.state)
+		}
+	}
+}
+
+func TestGen(t *testing.T) {
+	t.SkipNow()
+
+	seed := time.Now().UnixMicro()
+	fmt.Println("seed", seed)
+	rng := rand.New(rand.NewSource(seed))
+
+	size := 6
+	c := New[int, string](size)
+	exec := func(cmd string, key int) {
+		defer func() {
+			if v := recover(); v != nil {
+				fmt.Printf(" // %s(%d)\n", cmd, key)
+				panic(v)
+			}
+		}()
+		var val string
+		switch cmd {
+		case "get":
+			val, _ = c.Get(key)
+		case "set":
+			val = fmt.Sprint(key)
+			c.Set(key, val)
+		case "del":
+			c.Delete(key)
+		}
+		fmt.Printf("{cmd: %q, key: %d, val: %q, state: %#v},\n", cmd, key, val, cacheState(c))
+	}
+	for i := 0; i < size*4; i++ {
+		exec("set", i%(size*2))
+	}
+	for i := 0; i < 1000; i++ {
+		switch n := rng.Intn(20); {
+		case n < 8:
+			exec("get", rng.Intn(size*3))
+		case n < 16:
+			exec("set", rng.Intn(size*4))
+		default:
+			exec("del", rng.Intn(size*2))
 		}
 	}
 }
